@@ -7,6 +7,7 @@
   "scripts": {
     "test": "test",
     "build": "tsc && rollup -c rollup.config.js",
+    "watch": "rollup -c rollup.config.js --watch",
     "rimraf": "rimraf dist"
   },
   "repository": {
