@@ -24,9 +24,9 @@ function EllipseWithCBzier() {
         if (canvasRef.current) {
             const canvas = canvasRef.current;
             const ctx = canvas.getContext('2d');
-            drawEllipse(ctx, 0, 75, 300, 200);
-            drawEllipse(ctx, 175, 50, 200, 300);
-            drawEllipse(ctx, 300, 50, 300, 300);
+            drawEllipse(ctx, 100, 100, 200, 200);
+            drawEllipse(ctx, 100, 160, 200, 80);
+            drawEllipse(ctx, 160, 100, 80, 200);
             drawEllipseWithAnimation(ctx);
         }
     }, [canvasRef]);
