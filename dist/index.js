@@ -1,3 +1,20 @@
+function assert(condition, err) {
+    if (!condition) {
+        throw new Error(err);
+    }
+}
+function lli4(p1, p2, p3, p4) {
+    const x1 = p1[0], y1 = p1[1], x2 = p2[0], y2 = p2[1], x3 = p3[0], y3 = p3[1], x4 = p4[0], y4 = p4[1];
+    return lli8(x1, y1, x2, y2, x3, y3, x4, y4);
+}
+function lli8(x1, y1, x2, y2, x3, y3, x4, y4) {
+    const nx = (x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4), ny = (x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4), d = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+    if (d == 0) {
+        return false;
+    }
+    return { x: nx / d, y: ny / d };
+}
+
 function bezierFormula(p0, p1, p2, p3) {
     return function bezier(t) {
         return p0 * Math.pow(1 - t, 3) + p1 * 3 * t * Math.pow(1 - t, 2) + p2 * 3 * Math.pow(t, 2) * (1 - t) + p3 * Math.pow(t, 3);
@@ -13,12 +30,140 @@ function bezierFormula(p0, p1, p2, p3) {
 function bezierCurve(p0, p1, p2, p3) {
     const formulaX = bezierFormula(p0[0], p1[0], p2[0], p3[0]);
     const formulaY = bezierFormula(p0[1], p1[1], p2[1], p3[1]);
-    const steps = 100, result = [];
+    const steps = 1000, result = [];
     for (let i = 0; i < steps; i++) {
         result.push([formulaX(i / steps), formulaY(i / steps)]);
     }
     result.push([formulaX(1), formulaY(1)]);
     return result;
+}
+/**
+ * 计算由points组成的n-1条线段的中间控制点p1、p2
+ * @param points number[] 轨迹点坐标集合
+ * @returns { p1: number[], p2: number[] } 控制点p1、p2的集合
+ */
+function computeControlPoints(points) {
+    const n = points.length - 1;
+    const p1 = new Array(n), p2 = new Array(n);
+    const a = new Array(n), b = new Array(n), c = new Array(n), r = new Array(n);
+    // first segment
+    a[0] = 0;
+    b[0] = 2;
+    c[0] = 1;
+    r[0] = points[0] + 2 * points[1];
+    // middle segment
+    for (let i = 1; i < n - 1; i++) {
+        a[i] = 1;
+        b[i] = 4;
+        c[i] = 1;
+        r[i] = 4 * points[i] + 2 * points[i + 1];
+    }
+    // last segment
+    a[n - 1] = 2;
+    b[n - 1] = 7;
+    c[n - 1] = 0;
+    r[n - 1] = 8 * points[n - 1] + points[n];
+    // Thomas algorithm (from Wikipedia):https://www.cnblogs.com/xpvincent/archive/2013/01/25/2877411.html
+    for (let i = 1; i <= n - 1; i++) {
+        b[i] = b[i] - a[i] * c[i - 1] / b[i - 1];
+        r[i] = r[i] - a[i] * r[i - 1] / b[i - 1];
+    }
+    p1[n - 1] = r[n - 1] / b[n - 1];
+    // from n-2 to 0，compute values of p1;
+    for (let i = n - 2; i >= 0; i--) {
+        // b[i] * p1[i] + c[i] * p1[i + 1] = r[i],
+        p1[i] = (r[i] - c[i] * p1[i + 1]) / b[i];
+    }
+    // compute p2 by equation p2[i] = 2 * points[i] - p1[i]
+    for (let i = 0; i < n - 1; i++) {
+        p2[i] = 2 * points[i + 1] - p1[i + 1];
+    }
+    // by equation p1[n - 1] - 2 * p2[n - 1] + points[n] = 0
+    p2[n - 1] = (p1[n - 1] + points[n]) / 2;
+    return { p1, p2 };
+}
+function offsetAt(segment, t, distance) {
+    const { p0, p1, p2, p3 } = segment;
+    const formulaX = bezierFormula(p0[0], p1[0], p2[0], p3[0]);
+    const formulaY = bezierFormula(p0[1], p1[1], p2[1], p3[1]);
+    const [x, y] = [formulaX(t), formulaY(t)];
+    const n = normal(segment, t);
+    const ret = {
+        c: [x, y],
+        n: [n.x, n.y],
+        x: x + n.x * distance,
+        y: y + n.y * distance,
+    };
+    return ret;
+}
+function offset(segments, distance) {
+    return segments.map((s) => {
+        return scale(s, distance);
+    });
+}
+function scale(segment, distance) {
+    const r1 = distance;
+    const r2 = distance;
+    const order = 3;
+    const points = [segment.p0, segment.p1, segment.p2, segment.p3];
+    // v为起、终两个位置的法线距离为10的两个点
+    const v = [offsetAt(segment, 0, 10), offsetAt(segment, 1, 10)];
+    // np为计算结果
+    const np = [];
+    // 0为两条线的交点
+    const o = lli4([v[0].x, v[0].y], v[0].c, [v[1].x, v[1].y], v[1].c);
+    if (!o) {
+        throw new Error("cannot scale this curve. Try reducing it first.");
+    }
+    [0, 1].forEach(function (t) {
+        // order代表几次曲线，2次、3次曲线。
+        const p = (np[t * order] = [...points[t * order]]);
+        // 计算p点的位置
+        p[0] += (t ? r2 : r1) * v[t].n[0];
+        p[1] += (t ? r2 : r1) * v[t].n[1];
+    });
+    [0, 1].forEach((t) => {
+        // p为端点位置
+        const p = np[t * order];
+        // t位置一阶导值，斜率，端点位置的斜率
+        const d = derivative(segment, t);
+        // 感觉p2为一个在切线上的点
+        const p2 = [p[0] + d.x, p[1] + d.y]; // { x: p[0] + d.x, y: p[1] + d.y };
+        // p为端点、p2为切线上的点、points[t + 1]为相邻的下一个端点
+        const desto = lli4(p, p2, [o.x, o.y], points[t + 1]);
+        np[t + 1] = [desto.x, desto.y];
+    });
+    return { p0: np[0], p1: np[1], p2: np[2], p3: np[3] };
+}
+function normal(segment, t) {
+    const { p0, p1, p2, p3 } = segment;
+    // Calculate the tangent vector
+    var tx = 3 * (1 - t) ** 2 * (p1[0] - p0[0]) + 6 * (1 - t) * t * (p2[0] - p1[0]) + 3 * t ** 2 * (p3[0] - p2[0]);
+    var ty = 3 * (1 - t) ** 2 * (p1[1] - p0[1]) + 6 * (1 - t) * t * (p2[1] - p1[1]) + 3 * t ** 2 * (p3[1] - p2[1]);
+    var tangent = { x: tx, y: ty };
+    // Calculate the normal vector by rotating the tangent vector 90 degrees clockwise
+    var normal = { x: tangent.y, y: -tangent.x };
+    // Normalize the normal vector
+    var length = Math.sqrt(normal.x ** 2 + normal.y ** 2);
+    if (length === 0) {
+        // If the length is zero, return a zero vector
+        return { x: 0, y: 0 };
+    }
+    else {
+        // Otherwise, normalize the vector and return it
+        return { x: normal.x / length, y: normal.y / length };
+    }
+}
+function derivative(segment, t) {
+    // derivative of cubic bezier curve
+    const formula = (p0, p1, p2, p3, t) => {
+        return -3 * Math.pow(1 - t, 2) * p0 + 3 * (1 - 4 * t + 3 * Math.pow(t, 2)) * p1 + 3 * (2 * t - 3 * Math.pow(t, 2)) * p2 + 3 * Math.pow(t, 2) * p3;
+    };
+    const { p0, p1, p2, p3 } = segment;
+    return {
+        x: formula(p0[0], p1[0], p2[0], p3[0], t),
+        y: formula(p0[1], p1[1], p2[1], p3[1], t),
+    };
 }
 
 const kappa = 4 * (Math.sqrt(2) - 1) / 3;
@@ -59,7 +204,7 @@ function drawEllipse(ctx, x, y, w, h) {
         const b = Number(255 * Math.random());
         return `rgb(${r},${g},${b})`;
     };
-    ctx.lineWidth = 5;
+    ctx.lineWidth = 3;
     for (let i = 1; i < points.length; i++) {
         ctx.beginPath();
         const prevPoint = points[i - 1];
@@ -71,4 +216,181 @@ function drawEllipse(ctx, x, y, w, h) {
     }
 }
 
-export { bezierCurve, bezierFormula, drawEllipse, ellipse };
+/**
+ * 动画效果函数，返回基于t(范围[0, 1])的函数，其执行结果范围为[0, 1]
+ * @param easing
+ * @returns 动画函数
+ */
+function resolveEasing(easing) {
+    const bezierMatch = /cbezier\((\d+.?\d+),\s?(\d+.?\d+),\s?(\d+.?\d+),\s?(\d+.?\d+)\)/g.exec(easing);
+    if (bezierMatch === null || bezierMatch === void 0 ? void 0 : bezierMatch.length) {
+        Number(bezierMatch[1]); const y1 = Number(bezierMatch[2]); Number(bezierMatch[3]); const y2 = Number(bezierMatch[4]);
+        return bezierFormula(0, y1, y2, 1);
+    }
+    return (t) => t;
+}
+function resolveStyles(el, styles) {
+    var _a, _b;
+    const keys = Object.keys(styles[0]);
+    const styleFuncs = {};
+    for (const key of keys) {
+        // 测试先支持百分比格式
+        const unit = '%';
+        const sVal = Number((_a = /(\d+)%/g.exec(styles[0][key] + '')) === null || _a === void 0 ? void 0 : _a[1]);
+        const eVal = Number((_b = /(\d+)%/g.exec(styles[1][key] + '')) === null || _b === void 0 ? void 0 : _b[1]);
+        const total = eVal - sVal;
+        styleFuncs[key] = (percent) => {
+            const curVal = sVal + total * percent;
+            // console.log(`percent: ${percent}, style func: ` + curVal + unit);
+            return curVal + unit;
+        };
+    }
+    return styleFuncs;
+}
+/**
+ * 元素动画
+ * @param el DOM元素
+ * @param props 动画属性
+ */
+function animate(el, props) {
+    const duration = props.duration;
+    const easingFunc = resolveEasing(props.easing);
+    const styleFuncs = resolveStyles(el, props.styles);
+    const start = Date.now();
+    const animationHandle = () => {
+        const timeRatio = (Date.now() - start) / duration;
+        // console.log(`timeRatio: ${timeRatio}`);
+        if (timeRatio <= 1) {
+            const percent = easingFunc(timeRatio);
+            for (const key in styleFuncs) {
+                const elementStyle = el.style;
+                elementStyle[key] = styleFuncs[key](percent);
+            }
+            requestAnimationFrame(animationHandle);
+        }
+    };
+    animationHandle();
+}
+
+/**
+ * 曲线平滑，对轨迹点points做平滑处理
+ * @param points
+ * @returns
+ */
+function smooth(points) {
+    if (points.length <= 2) {
+        return points;
+    }
+    const { p1: xp1, p2: xp2 } = computeControlPoints(points.map(p => p[0]));
+    const { p1: yp1, p2: yp2 } = computeControlPoints(points.map(p => p[1]));
+    const smoothed = [];
+    for (let i = 0; i < points.length - 1; i++) {
+        const p0 = points[i], p1 = [xp1[i], yp1[i]], p2 = [xp2[i], yp2[i]], p3 = points[i + 1];
+        const line = bezierCurve(p0, p1, p2, p3);
+        line.splice(-1, 1);
+        smoothed.push(...line);
+    }
+    smoothed.push(points[points.length - 1]);
+    return smoothed;
+}
+
+const configs = {
+    padding: { x: 100, y: 50 },
+    lineWidth: 1,
+    segLength: { x: 10, y: 5 },
+    lineColors: ["#87b4e7", "#80e286", "#8087e2"]
+};
+function getDestPoints(xAxis, series, index) {
+    const originalPoints = xAxis.data.map((d, i) => ([d, series[index].data[i]]));
+    let destPoints = originalPoints;
+    if (series[index].type === 'smooth') {
+        destPoints = smooth(destPoints);
+    }
+    return [originalPoints, destPoints];
+}
+function init(canvas, options) {
+    const ctx = canvas.getContext('2d');
+    assert(ctx, 'Browser don\'t support CanvasRenderingContext2D.');
+    const origin = [configs.padding.x, canvas.height - configs.padding.y];
+    ctx.lineWidth = configs.lineWidth;
+    // draw y axios
+    ctx.beginPath();
+    // draw x axios
+    ctx.strokeStyle = '#ced6e9';
+    ctx.moveTo(origin[0], origin[1]);
+    ctx.lineTo(canvas.width - configs.padding.x, canvas.height - configs.padding.y);
+    // draw value on axios with xAxis's data
+    const xUnit = (canvas.width - 2 * configs.padding.x) / configs.segLength.x;
+    for (let i = 0; i <= configs.segLength.x; i++) {
+        ctx.moveTo(origin[0] + xUnit * i, origin[1]);
+        ctx.lineTo(origin[0] + xUnit * i, origin[1] + 5);
+    }
+    // draw value on y axios with yAxis's data
+    const yUnit = (canvas.height - 2 * configs.padding.y) / configs.segLength.y;
+    ctx.strokeStyle = 'rgba(230, 230, 230, 1)';
+    for (let i = 0; i <= configs.segLength.y; i++) {
+        ctx.moveTo(origin[0], origin[1] - yUnit * i);
+        ctx.lineTo(canvas.width - configs.padding.x, origin[1] - yUnit * i);
+    }
+    ctx.stroke();
+    // draw title
+    ctx.font = "20px Georgia";
+    ctx.fillText(options.title.text, canvas.width / 2 - options.title.text.length * 5, configs.padding.y - 30);
+}
+function render(canvas, options) {
+    const ctx = canvas.getContext('2d');
+    assert(ctx, 'Browser don\'t support CanvasRenderingContext2D.');
+    const origin = [configs.padding.x, canvas.height - configs.padding.y];
+    // draw value on y axios with yAxis's data
+    let max = -Infinity;
+    options.series[0].data.forEach((val, i) => {
+        max = Math.max(val, max);
+    });
+    const yUnit = (canvas.height - configs.padding.y * 2) / configs.segLength.y;
+    const yResolution = max / (canvas.height - 2 * configs.padding.y);
+    const xUnit = (canvas.width - configs.padding.x * 2) / configs.segLength.x;
+    const xResolution = (options.xAxis.data.at(-1) - options.xAxis.data[0]) / (canvas.width - 2 * configs.padding.x);
+    ctx.font = "12px Georgia";
+    ctx.beginPath();
+    const rangeX = options.xAxis.data.at(-1) - options.xAxis.data[0];
+    // draw scale value on x-axios.
+    for (let i = 0; i < configs.segLength.x; i++) {
+        const value = options.xAxis.data[0] + Math.floor(i * rangeX / configs.segLength.x);
+        ctx.fillText(value + '', origin[0] + i * xUnit, origin[1] + 20);
+    }
+    // draw scale value on y-axios
+    for (let i = 0; i < configs.segLength.y; i++) {
+        const value = Math.floor((i + 1) * max / configs.segLength.y) + '';
+        ctx.fillText(value, origin[0] - value.length * 5 - 10, origin[1] - (i + 1) * yUnit);
+    }
+    for (let index = 0; index < options.series.length; index++) {
+        ctx.beginPath();
+        const [originalPoints, destPoints] = getDestPoints(options.xAxis, options.series, index);
+        // draw data line
+        ctx.strokeStyle = configs.lineColors[index % configs.lineColors.length];
+        ctx.lineWidth = 2;
+        for (let i = 1; i < destPoints.length; i++) {
+            ctx.moveTo(origin[0] + (destPoints[i - 1][0] - options.xAxis.data[0]) / xResolution, origin[1] - destPoints[i - 1][1] / yResolution);
+            ctx.lineTo(origin[0] + (destPoints[i][0] - options.xAxis.data[0]) / xResolution, origin[1] - destPoints[i][1] / yResolution);
+        }
+        // draw data point
+        ctx.fillStyle = configs.lineColors[index % configs.lineColors.length];
+        for (let i = 0; i < originalPoints.length; i++) {
+            const psotion = [origin[0] + (originalPoints[i][0] - options.xAxis.data[0]) / xResolution, origin[1] - originalPoints[i][1] / yResolution];
+            ctx.moveTo(psotion[0], psotion[1]);
+            ctx.arc(psotion[0], psotion[1], 4, 0, 2 * Math.PI);
+            ctx.fill();
+        }
+        ctx.stroke();
+    }
+}
+function cchart(ele, options) {
+    const canvas = document.createElement('canvas');
+    canvas.width = ele.clientWidth;
+    canvas.height = ele.clientHeight;
+    ele.appendChild(canvas);
+    init(canvas, options);
+    render(canvas, options);
+}
+
+export { animate, bezierCurve, bezierFormula, cchart, computeControlPoints, drawEllipse, ellipse, offset, offsetAt, scale };
