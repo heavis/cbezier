@@ -204,7 +204,7 @@ function drawEllipse(ctx, x, y, w, h) {
         const b = Number(255 * Math.random());
         return `rgb(${r},${g},${b})`;
     };
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 5;
     for (let i = 1; i < points.length; i++) {
         ctx.beginPath();
         const prevPoint = points[i - 1];
@@ -217,32 +217,197 @@ function drawEllipse(ctx, x, y, w, h) {
 }
 
 /**
+ * https://github.com/gre/bezier-easing
+ * BezierEasing - use bezier curve for transition easing function
+ * by Gaëtan Renaudeau 2014 - 2015 – MIT License
+ */
+// These values are established by empiricism with tests (tradeoff: performance VS precision)
+var NEWTON_ITERATIONS = 4;
+var NEWTON_MIN_SLOPE = 0.001;
+var SUBDIVISION_PRECISION = 0.0000001;
+var SUBDIVISION_MAX_ITERATIONS = 10;
+var kSplineTableSize = 11;
+var kSampleStepSize = 1.0 / (kSplineTableSize - 1.0);
+var float32ArraySupported = typeof Float32Array === 'function';
+function A(aA1, aA2) { return 1.0 - 3.0 * aA2 + 3.0 * aA1; }
+function B(aA1, aA2) { return 3.0 * aA2 - 6.0 * aA1; }
+function C(aA1) { return 3.0 * aA1; }
+// Returns x(t) given t, x1, and x2, or y(t) given t, y1, and y2.
+// at为t，aA1表示x1或者x2,aA2表示y1或者y2
+// 其形式和p0 * Math.pow(1 - t, 3) + p1 * 3 * t * Math.pow(1 - t, 2) + p2 * 3 * Math.pow(t, 2) * (1 - t) + p3 * Math.pow(t, 3)一致
+function calcBezier(aT, aA1, aA2) { return ((A(aA1, aA2) * aT + B(aA1, aA2)) * aT + C(aA1)) * aT; }
+// Returns dx/dt given t, x1, and x2, or dy/dt given t, y1, and y2.
+// 求曲线方程的一阶导函数
+function getSlope(aT, aA1, aA2) { return 3.0 * A(aA1, aA2) * aT * aT + 2.0 * B(aA1, aA2) * aT + C(aA1); }
+// 二分球根法：
+// 求得的根t，位于aA和aB之间, mX1、mX2分别对应p1、p2的X坐标
+// https://zhuanlan.zhihu.com/p/112845185
+function binarySubdivide(aX, aA, aB, mX1, mX2) {
+    var currentX, currentT, i = 0;
+    do {
+        currentT = aA + (aB - aA) / 2.0;
+        // 假设f(t) = 0，求解方程的根。其f(t)=calcBezier(t) - ax
+        // f(t)为递增函数
+        currentX = calcBezier(currentT, mX1, mX2) - aX;
+        if (currentX > 0.0) {
+            aB = currentT;
+        }
+        else {
+            aA = currentT;
+        }
+        // 如果currentX小于等于最小精度(SUBDIVISION_PRECISION)或者超过迭代次数SUBDIVISION_MAX_ITERATIONS，则终止
+    } while (Math.abs(currentX) > SUBDIVISION_PRECISION && ++i < SUBDIVISION_MAX_ITERATIONS);
+    return currentT;
+}
+function newtonRaphsonIterate(aX, aGuessT, mX1, mX2) {
+    // NEWTON_ITERATIONS为4， 只进行了4次迭代， 根据精度和性能之间做了平衡。
+    for (var i = 0; i < NEWTON_ITERATIONS; ++i) {
+        // 计算t值对应位置的斜率
+        var currentSlope = getSlope(aGuessT, mX1, mX2);
+        if (currentSlope === 0.0) {
+            return aGuessT;
+        }
+        // 假设f(t) = 0，求解方程的根。其f(t)=calcBezier(t) - ax
+        // 牛顿-拉佛森方法: Xn-1 = Xn - f(t) / f'(t)，应用到求贝塞尔曲线的根：Tn = Tn+1 - (calcBezier(t) - ax) / getSlope(t)
+        var currentX = calcBezier(aGuessT, mX1, mX2) - aX;
+        aGuessT -= currentX / currentSlope;
+    }
+    // 这里只迭代了4次，求得近似值
+    return aGuessT;
+}
+function LinearEasing(x) {
+    return x;
+}
+function bezier(mX1, mY1, mX2, mY2) {
+    // 判断x轴的值是否在[0,1]范围
+    if (!(0 <= mX1 && mX1 <= 1 && 0 <= mX2 && mX2 <= 1)) {
+        throw new Error('bezier x values must be in [0, 1] range');
+    }
+    // 如果两个点在一条线上，则使用线性动画
+    if (mX1 === mY1 && mX2 === mY2) {
+        return LinearEasing;
+    }
+    // kSplineTableSize为11，kSampleStepSize为1.0 / (11 - 1.0) = 0.1;
+    // Precompute samples table
+    // sampleValues存储样本值的目的是提升性能，不用每次都计算。
+    var sampleValues = float32ArraySupported ? new Float32Array(kSplineTableSize) : new Array(kSplineTableSize);
+    // i从0到10，sampleValues长度为11
+    for (var i = 0; i < kSplineTableSize; ++i) {
+        // i * kSampleStepSize的范围0到1(10 * 0.1);
+        // sampleValues[0] = calcBezier(0, mX1, mX2);
+        // sampleValues[1] = calcBezier(0.1, mX1, mX2);
+        // ...
+        // sampleValues[9] = calcBezier(0.9, mX1, mX2);
+        // sampleValues[10] = calcBezier(1, mX1, mX2);
+        sampleValues[i] = calcBezier(i * kSampleStepSize, mX1, mX2);
+    }
+    // 已知X值，根据X值求解T值
+    function getTForX(aX) {
+        var intervalStart = 0.0;
+        var currentSample = 1;
+        // lastSample为10
+        var lastSample = kSplineTableSize - 1;
+        // sampleValues[i]表示i从0以0.1为step，每一步对应的曲线的X坐标值，直到X坐标值小于等于aX
+        // 假如aX=0.4，则sampleValues[currentSample]<=aX为止
+        for (; currentSample !== lastSample && sampleValues[currentSample] <= aX; ++currentSample) {
+            // intervalStart为到aX经过的step步骤
+            intervalStart += kSampleStepSize; // kSampleStepSize为0.1
+        }
+        //TODO:currentSample为什么要减1？sampleValues[currentSample]大于了ax，所以要--，使得sampleValues[currentSample]<=ax
+        --currentSample;
+        // Interpolate to provide an initial guess for t
+        // ax-sampleValues[currentSample]为两者之间的差值，而(sampleValues[currentSample + 1] - sampleValues[currentSample])一个步骤之间的总差值。
+        var dist = (aX - sampleValues[currentSample]) / (sampleValues[currentSample + 1] - sampleValues[currentSample]);
+        // guessForT为预计的初始T值，很粗糙的一个值，接下来会基于该值求根(t值)。
+        var guessForT = intervalStart + dist * kSampleStepSize;
+        // 预测的T值对应位置的斜率
+        var initialSlope = getSlope(guessForT, mX1, mX2);
+        // 当斜率大于0.05729°时，使用newtonRaphsonIterate算法预测T值。0.05729是一个很小的斜率
+        if (initialSlope >= NEWTON_MIN_SLOPE) {
+            return newtonRaphsonIterate(aX, guessForT, mX1, mX2);
+        }
+        else if (initialSlope === 0.0) { // 当斜率为0，则直接返回
+            return guessForT;
+        }
+        else { // 当斜率小于0.05729并且不等于0时，使用binarySubdivide
+            // 求得的根t，位于intervalStart和intervalStart + kSampleStepSize之间, mX1、mX2分别对应p1、p2的X坐标
+            return binarySubdivide(aX, intervalStart, intervalStart + kSampleStepSize, mX1, mX2);
+        }
+    }
+    return function BezierEasing(x) {
+        // Because JavaScript number are imprecise, we should guarantee the extremes are right.
+        if (x === 0 || x === 1) {
+            return x;
+        }
+        return calcBezier(getTForX(x), mY1, mY2);
+    };
+}
+
+const easeMap = new Map([
+    ['linear', 'cbezier(0.0, 0.0, 1.0, 1.0)'],
+    ['ease-in', 'cbezier(0.42, 0.0, 1.0, 1.0)'],
+    ['ease-out', 'cbezier(0.0, 0.0, 0.58, 1.0)'],
+    ['ease-in-out', 'cbezier(0.42, 0.0, 0.58, 1.0)'],
+]);
+/**
  * 动画效果函数，返回基于t(范围[0, 1])的函数，其执行结果范围为[0, 1]
  * @param easing
  * @returns 动画函数
  */
 function resolveEasing(easing) {
-    const bezierMatch = /cbezier\((\d+.?\d+),\s?(\d+.?\d+),\s?(\d+.?\d+),\s?(\d+.?\d+)\)/g.exec(easing);
+    if (easeMap.has(easing)) {
+        easing = easeMap.get(easing);
+    }
+    let bezierMatch = /cbezier\((\d+.?\d+),\s?(\d+.?\d+),\s?(\d+.?\d+),\s?(\d+.?\d+)\)/g.exec(easing);
     if (bezierMatch === null || bezierMatch === void 0 ? void 0 : bezierMatch.length) {
-        Number(bezierMatch[1]); const y1 = Number(bezierMatch[2]); Number(bezierMatch[3]); const y2 = Number(bezierMatch[4]);
-        return bezierFormula(0, y1, y2, 1);
+        const x1 = Number(bezierMatch[1]), y1 = Number(bezierMatch[2]), x2 = Number(bezierMatch[3]), y2 = Number(bezierMatch[4]);
+        return bezier(x1, y1, x2, y2);
     }
     return (t) => t;
 }
+function getUnit(val) {
+    const split = /[+-]?\d*\.?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(%|px|pt|em|rem|in|cm|mm|ex|ch|pc|vw|vh|vmin|vmax|deg|rad|turn)?$/.exec(val);
+    if (split)
+        return split[1];
+}
+/**
+ * 将像素值转换为目标单位值
+ * @param {*} el
+ * @param {*} value
+ * @param {*} unit
+ * @returns
+ */
+function convertPxToUnit(el, value, unit) {
+    const baseline = 100;
+    // 创建一个和el类型一样的要素
+    const tempEl = document.createElement(el.tagName);
+    // 获取要素的parent
+    const parentEl = (el.parentNode && (el.parentNode !== document)) ? el.parentNode : document.body;
+    parentEl.appendChild(tempEl);
+    tempEl.style.position = 'absolute';
+    // 设置基线为100个目标单位
+    tempEl.style.width = baseline + unit;
+    // 宽度因子，目标长度/一个像素
+    const factor = baseline / tempEl.offsetWidth;
+    parentEl.removeChild(tempEl);
+    // parseFloat会将最后的单位忽略得到数值
+    const convertedUnit = factor * parseFloat(value);
+    return convertedUnit;
+}
 function resolveStyles(el, styles) {
-    var _a, _b;
-    const keys = Object.keys(styles[0]);
+    const keys = Object.keys(styles);
     const styleFuncs = {};
     for (const key of keys) {
         // 测试先支持百分比格式
-        const unit = '%';
-        const sVal = Number((_a = /(\d+)%/g.exec(styles[0][key] + '')) === null || _a === void 0 ? void 0 : _a[1]);
-        const eVal = Number((_b = /(\d+)%/g.exec(styles[1][key] + '')) === null || _b === void 0 ? void 0 : _b[1]);
-        const total = eVal - sVal;
+        const value = styles[key] + '';
+        const unit = getUnit(value);
+        const destValue = parseFloat(value);
+        const styleValue = getComputedStyle(el).getPropertyValue(key.toLowerCase());
+        const startValue = unit ? convertPxToUnit(el, styleValue, unit) : parseFloat(styleValue);
+        const total = destValue - startValue;
         styleFuncs[key] = (percent) => {
-            const curVal = sVal + total * percent;
-            // console.log(`percent: ${percent}, style func: ` + curVal + unit);
-            return curVal + unit;
+            const curVal = startValue + total * percent;
+            return unit ? curVal + unit : curVal;
         };
     }
     return styleFuncs;
@@ -256,10 +421,15 @@ function animate(el, props) {
     const duration = props.duration;
     const easingFunc = resolveEasing(props.easing);
     const styleFuncs = resolveStyles(el, props.styles);
+    const cAniInstance = {
+        paused: false,
+    };
     const start = Date.now();
     const animationHandle = () => {
+        if (cAniInstance.paused) {
+            return;
+        }
         const timeRatio = (Date.now() - start) / duration;
-        // console.log(`timeRatio: ${timeRatio}`);
         if (timeRatio <= 1) {
             const percent = easingFunc(timeRatio);
             for (const key in styleFuncs) {
@@ -269,7 +439,12 @@ function animate(el, props) {
             requestAnimationFrame(animationHandle);
         }
     };
-    animationHandle();
+    requestAnimationFrame(animationHandle);
+    return {
+        pause: () => {
+            cAniInstance.paused = true;
+        }
+    };
 }
 
 /**
